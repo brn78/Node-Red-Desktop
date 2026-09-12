@@ -1,0 +1,32 @@
+﻿## Visual Studio & .NET Build Artifacts
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+
+# Visual Studio user files
+*.user
+*.userosscache
+*.sln.docstates
+*.suo
+.vs/
+.vscode/
+
+# Build results
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+build/
+bld/
+
+# NuGet Packages
+*.nupkg
+packages/
+
+# Temporary files
+*.tmp
+*.bak
+*~
+thumbs.db
+desktop.ini

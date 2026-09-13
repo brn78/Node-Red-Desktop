@@ -30,6 +30,10 @@ Public Module UpdateChecker
         Public ReleaseUrl As String
         ''' <summary>URL del changelog della versione disponibile.</summary>
         Public ChangelogUrl As String
+        ''' <summary>URL diretto di download dell'asset installer (.exe).</summary>
+        Public DownloadUrl As String
+        ''' <summary>Note di rilascio della versione.</summary>
+        Public ReleaseNotes As String
     End Structure
 
 #End Region
@@ -168,6 +172,104 @@ Public Module UpdateChecker
         End Try
 
         Return info
+    End Function
+
+    ''' <summary>
+    ''' Verifica in modo asincrono se è disponibile una nuova release di Node-RED Desktop su GitHub.
+    ''' Interroga api.github.com/repos/brn78/NodeRedDesktop/releases/latest
+    ''' </summary>
+    Public Async Function CheckDesktopAppUpdateAsync() As Task(Of UpdateInfo)
+        Dim info As New UpdateInfo()
+        info.ComponentName = "Node-RED Desktop"
+        info.IsUpdateAvailable = False
+        info.CurrentVersion = "1.0.0"
+        info.ReleaseUrl = "https://github.com/brn78/NodeRedDesktop/releases"
+        info.ChangelogUrl = "https://github.com/brn78/NodeRedDesktop/releases"
+
+        Try
+            Dim jsonResponse As String = Await FetchWithTimeoutAsync("https://api.github.com/repos/brn78/NodeRedDesktop/releases/latest", 10000)
+
+            Dim tagMatch As Match = Regex.Match(jsonResponse, """tag_name""\s*:\s*""([^""]+)""")
+            If tagMatch.Success Then
+                info.LatestVersion = tagMatch.Groups(1).Value.TrimStart("v"c)
+                info.IsUpdateAvailable = (CompareVersions(info.LatestVersion, info.CurrentVersion) > 0)
+            End If
+
+            Dim htmlMatch As Match = Regex.Match(jsonResponse, """html_url""\s*:\s*""([^""]+)""")
+            If htmlMatch.Success Then
+                info.ReleaseUrl = htmlMatch.Groups(1).Value
+                info.ChangelogUrl = htmlMatch.Groups(1).Value
+            End If
+
+            ' Cerca l'asset dell'eseguibile installer (.exe)
+            Dim assetMatch As Match = Regex.Match(jsonResponse, """browser_download_url""\s*:\s*""([^""]+\.exe)""")
+            If assetMatch.Success Then
+                info.DownloadUrl = assetMatch.Groups(1).Value
+            End If
+
+            Dim bodyMatch As Match = Regex.Match(jsonResponse, """body""\s*:\s*""([^""]*)""")
+            If bodyMatch.Success Then
+                info.ReleaseNotes = Regex.Unescape(bodyMatch.Groups(1).Value)
+            End If
+
+            If info.IsUpdateAvailable Then
+                LogManager.AddInfo(String.Format("Nuova versione Node-RED Desktop disponibile: v{0} -> v{1}", info.CurrentVersion, info.LatestVersion), "UpdateChecker")
+            Else
+                LogManager.AddInfo(String.Format("Node-RED Desktop è aggiornato (v{0})", info.CurrentVersion), "UpdateChecker")
+            End If
+
+        Catch ex As Exception
+            LogManager.AddWarn(String.Format("CheckDesktopAppUpdateAsync: {0}", ex.Message), "UpdateChecker")
+            info.IsUpdateAvailable = False
+        End Try
+
+        Return info
+    End Function
+
+    ''' <summary>
+    ''' Scarica l'installer di Node-RED Desktop da GitHub releases e lo esegue.
+    ''' </summary>
+    Public Async Function DownloadAndInstallAppUpdateAsync(downloadUrl As String, progressCallback As Action(Of Integer, String)) As Task(Of Boolean)
+        Try
+            If String.IsNullOrWhiteSpace(downloadUrl) Then
+                Return False
+            End If
+
+            Dim tempFile As String = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "Node-RED-Desktop-Setup.exe")
+            If System.IO.File.Exists(tempFile) Then
+                Try : System.IO.File.Delete(tempFile) : Catch : End Try
+            End If
+
+            progressCallback?.Invoke(0, "Avvio download nuovo installer...")
+
+            Using client As New WebClient()
+                client.Headers.Add("User-Agent", "NodeRedDesktop-Updater")
+                AddHandler client.DownloadProgressChanged, Sub(sender, e)
+                    Dim mbReceived As Double = e.BytesReceived / 1048576.0
+                    Dim mbTotal As Double = e.TotalBytesToReceive / 1048576.0
+                    Dim text As String = If(mbTotal > 0,
+                        String.Format("Download: {0}% ({1:F1} / {2:F1} MB)", e.ProgressPercentage, mbReceived, mbTotal),
+                        String.Format("Download: {0:F1} MB scaricati", mbReceived))
+                    progressCallback?.Invoke(e.ProgressPercentage, text)
+                End Sub
+
+                Await client.DownloadFileTaskAsync(New Uri(downloadUrl), tempFile)
+            End Using
+
+            If System.IO.File.Exists(tempFile) AndAlso New System.IO.FileInfo(tempFile).Length > 50000 Then
+                progressCallback?.Invoke(100, "Download completato! Avvio installer...")
+
+                Dim psi As New ProcessStartInfo(tempFile)
+                psi.UseShellExecute = True
+                Process.Start(psi)
+                Return True
+            Else
+                Return False
+            End If
+        Catch ex As Exception
+            LogManager.AddError(String.Format("Download aggiornamento fallito: {0}", ex.Message), "UpdateChecker")
+            Return False
+        End Try
     End Function
 
     ''' <summary>

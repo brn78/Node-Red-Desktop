@@ -588,6 +588,7 @@ Partial Public Class MainForm
 #Region "Eventi Aggiornamenti Suite"
     Private _latestUpdateInfo As UpdateChecker.UpdateInfo
     Private _hasUpdate As Boolean = False
+    Private _isAppUpdate As Boolean = False
 
     Private Async Sub btnCheckUpdates_Click(sender As Object, e As EventArgs) Handles btnCheckUpdates.Click
         btnCheckUpdates.Enabled = False
@@ -599,30 +600,56 @@ Partial Public Class MainForm
 
     Private Async Function CheckUpdatesAsync(silent As Boolean) As Task
         Try
+            ' 1. Controllo aggiornamento applicazione desktop principale da GitHub
+            Dim appUpdate = Await UpdateChecker.CheckDesktopAppUpdateAsync()
+            If appUpdate.IsUpdateAvailable Then
+                _latestUpdateInfo = appUpdate
+                _hasUpdate = True
+                _isAppUpdate = True
+                pnlUpdateBanner.BackColor = Color.LightGreen
+                pnlUpdateBanner.Visible = True
+                lblUpdateBannerText.Text = "🚀 Aggiornamento disponibile per Node-RED Desktop: v" & appUpdate.LatestVersion & " (Installato: v" & appUpdate.CurrentVersion & ")"
+                btnUpdateNowQuick.Text = "🚀 Scarica e Installa"
+                btnUpdateNowQuick.Visible = True
+                lnkChangelogQuick.Visible = True
+                If Not silent Then
+                    ToastForm.Show("Nuova Versione Desktop", "È disponibile Node-RED Desktop v" & appUpdate.LatestVersion & "!", ToastType.Info)
+                End If
+                Return
+            End If
+
+            ' 2. Se l'app desktop è aggiornata, verifica Node-RED
             Dim nrUpdate = Await UpdateChecker.CheckNodeRedUpdateAsync()
             If nrUpdate.IsUpdateAvailable Then
                 _latestUpdateInfo = nrUpdate
                 _hasUpdate = True
+                _isAppUpdate = False
+                pnlUpdateBanner.BackColor = Color.LightGreen
                 pnlUpdateBanner.Visible = True
                 lblUpdateBannerText.Text = "🔔 Aggiornamento disponibile: Node-RED v" & nrUpdate.LatestVersion & " (Installato: v" & nrUpdate.CurrentVersion & ")"
+                btnUpdateNowQuick.Text = "Aggiorna Node-RED"
                 btnUpdateNowQuick.Visible = True
                 lnkChangelogQuick.Visible = True
                 If Not silent Then
                     ToastForm.Show("Aggiornamento Trovato", "Nuova versione Node-RED v" & nrUpdate.LatestVersion & " disponibile!", ToastType.Info)
                 End If
-            Else
-                _hasUpdate = False
-                Dim currentNr = DependencyChecker.GetNodeRedVersion()
-                Dim olVer = DependencyChecker.GetOllamaVersion()
-                Dim nrDisplay = If(String.IsNullOrEmpty(currentNr), "5.0.7", currentNr)
-                Dim olDisplay = If(String.IsNullOrEmpty(olVer), "0.34.0", olVer)
-                lblUpdateBannerText.Text = "✓ Suite aggiornata: Node-RED v" & nrDisplay & " | Ollama v" & olDisplay
-                btnUpdateNowQuick.Visible = False
-                lnkChangelogQuick.Visible = False
-                pnlUpdateBanner.Visible = True
-                If Not silent Then
-                    ToastForm.Show("Suite Aggiornata", "Tutti i componenti sono all'ultima versione.", ToastType.Success)
-                End If
+                Return
+            End If
+
+            ' 3. Tutto aggiornato
+            _hasUpdate = False
+            _isAppUpdate = False
+            Dim currentNr = DependencyChecker.GetNodeRedVersion()
+            Dim olVer = DependencyChecker.GetOllamaVersion()
+            Dim nrDisplay = If(String.IsNullOrEmpty(currentNr), "5.0.7", currentNr)
+            Dim olDisplay = If(String.IsNullOrEmpty(olVer), "0.34.0", olVer)
+            pnlUpdateBanner.BackColor = Color.FromArgb(235, 245, 235)
+            lblUpdateBannerText.Text = "✓ Tutto aggiornato: Node-RED Desktop v1.0.0 | Node-RED v" & nrDisplay & " | Ollama v" & olDisplay
+            btnUpdateNowQuick.Visible = False
+            lnkChangelogQuick.Visible = False
+            pnlUpdateBanner.Visible = True
+            If Not silent Then
+                ToastForm.Show("Suite Aggiornata", "Tutti i componenti sono all'ultima versione.", ToastType.Success)
             End If
         Catch ex As Exception
             LogManager.AddWarn("Verifica aggiornamenti fallita: " & ex.Message, "Update")
@@ -630,8 +657,38 @@ Partial Public Class MainForm
     End Function
 
     Private Async Sub btnUpdateNowQuick_Click(sender As Object, e As EventArgs) Handles btnUpdateNowQuick.Click
-        Dim res = MessageBox.Show("Avviare l'aggiornamento automatico di Node-RED? Node-RED verrà fermato temporaneamente per rilasciare i file bloccati e riavviato automaticamente.", "Conferma Aggiornamento", MessageBoxButtons.YesNo, MessageBoxIcon.Question)
-        If res <> DialogResult.Yes Then Return
+        If _isAppUpdate Then
+            Dim msgConfirm = "Scaricare e installare l'aggiornamento di Node-RED Desktop v" & _latestUpdateInfo.LatestVersion & "?" & Environment.NewLine & Environment.NewLine &
+                             "L'applicazione verrà chiusa al termine del download per avviare il nuovo setup."
+            Dim res = MessageBox.Show(msgConfirm, "Aggiornamento Node-RED Desktop", MessageBoxButtons.YesNo, MessageBoxIcon.Information)
+            If res <> DialogResult.Yes Then Return
+
+            btnUpdateNowQuick.Enabled = False
+            lblUpdateBannerText.Text = "Avvio download aggiornamento..."
+
+            Dim ok = Await UpdateChecker.DownloadAndInstallAppUpdateAsync(_latestUpdateInfo.DownloadUrl,
+                Sub(pct, text)
+                    BeginInvoke(Sub()
+                        lblUpdateBannerText.Text = text
+                    End Sub)
+                End Sub)
+
+            If ok Then
+                ToastForm.Show("Aggiornamento Scaricato", "Avvio del nuovo installer...", ToastType.Success)
+                _forceClose = True
+                Application.Exit()
+            Else
+                btnUpdateNowQuick.Enabled = True
+                ToastForm.Show("Errore Download", "Impossibile scaricare l'aggiornamento automaticamente. Apertura pagina GitHub...", ToastType.Error)
+                If Not String.IsNullOrEmpty(_latestUpdateInfo.ReleaseUrl) Then
+                    Process.Start(New ProcessStartInfo(_latestUpdateInfo.ReleaseUrl) With {.UseShellExecute = True})
+                End If
+            End If
+            Return
+        End If
+
+        Dim resNr = MessageBox.Show("Avviare l'aggiornamento automatico di Node-RED? Node-RED verrà fermato temporaneamente per rilasciare i file bloccati e riavviato automaticamente.", "Conferma Aggiornamento", MessageBoxButtons.YesNo, MessageBoxIcon.Question)
+        If resNr <> DialogResult.Yes Then Return
         btnUpdateNowQuick.Enabled = False
         tabMain.SelectedTab = tabEnvironment
         pgbEnvProgress.Visible = True
@@ -639,10 +696,10 @@ Partial Public Class MainForm
         rtbEnvOutput.Clear()
         rtbEnvOutput.AppendText("Inizio procedura di aggiornamento certificata..." & Environment.NewLine)
 
-        Dim ok = Await DependencyChecker.UpdateNodeRedAsync(Sub(line) BeginInvoke(Sub() rtbEnvOutput.AppendText(line & Environment.NewLine)))
+        Dim okNr = Await DependencyChecker.UpdateNodeRedAsync(Sub(line) BeginInvoke(Sub() rtbEnvOutput.AppendText(line & Environment.NewLine)))
         pgbEnvProgress.Visible = False
         btnUpdateNowQuick.Enabled = True
-        If ok Then
+        If okNr Then
             ToastForm.Show("Aggiornato!", "Node-RED è stato aggiornato con successo.", ToastType.Success)
             Await CheckEnvironmentAsync()
             Await CheckUpdatesAsync(silent:=True)
@@ -652,7 +709,7 @@ Partial Public Class MainForm
     End Sub
 
     Private Sub lnkChangelogQuick_LinkClicked(sender As Object, e As LinkLabelLinkClickedEventArgs) Handles lnkChangelogQuick.LinkClicked
-        Dim url = "https://github.com/node-red/node-red/releases"
+        Dim url = "https://github.com/brn78/NodeRedDesktop/releases"
         If _hasUpdate AndAlso Not String.IsNullOrEmpty(_latestUpdateInfo.ChangelogUrl) Then
             url = _latestUpdateInfo.ChangelogUrl
         End If

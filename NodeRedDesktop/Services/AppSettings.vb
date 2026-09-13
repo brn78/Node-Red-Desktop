@@ -110,6 +110,30 @@ Imports System.Xml.Serialization
         <XmlElement("LastKnownNodeRedVersion")>
         Public Property LastKnownNodeRedVersion As String = ""
 
+        ''' <summary>Percorso completo dell''eseguibile ollama.exe.</summary>
+        <XmlElement("OllamaExePath")>
+        Public Property OllamaExePath As String = ""
+
+        ''' <summary>Ultima versione nota di Ollama rilevata.</summary>
+        <XmlElement("LastKnownOllamaVersion")>
+        Public Property LastKnownOllamaVersion As String = ""
+
+        ''' <summary>Avvio automatico del server Ollama all''avvio della suite.</summary>
+        <XmlElement("AutoStartOllama")>
+        Public Property AutoStartOllama As Boolean = True
+
+        ''' <summary>Porta HTTP del server Ollama (default 11434).</summary>
+        <XmlElement("OllamaPort")>
+        Public Property OllamaPort As Integer = 11434
+
+        ''' <summary>Modello AI predefinito per la chat (default "chat-light").</summary>
+        <XmlElement("OllamaDefaultModel")>
+        Public Property OllamaDefaultModel As String = "chat-light"
+
+        ''' <summary>Host URL del server Ollama (default "http://localhost:11434").</summary>
+        <XmlElement("OllamaHost")>
+        Public Property OllamaHost As String = "http://localhost:11434"
+
 #End Region
 
 #Region "Impostazioni Sicurezza"
@@ -398,12 +422,70 @@ Imports System.Xml.Serialization
                     Next
                 End If
 
+                ' --- Allineamento NpmExePath con prefisso di NodeRedCmdPath ---
+                Dim roamingNpm = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "npm", "npm.cmd")
+                If File.Exists(roamingNpm) AndAlso Not String.IsNullOrWhiteSpace(cfg.NodeRedCmdPath) AndAlso cfg.NodeRedCmdPath.IndexOf("AppData", StringComparison.OrdinalIgnoreCase) >= 0 Then
+                    cfg.NpmExePath = roamingNpm
+                End If
+
+                ' --- Ricerca ollama.exe ---
+                If String.IsNullOrWhiteSpace(cfg.OllamaExePath) OrElse Not File.Exists(cfg.OllamaExePath) Then
+                    Dim ollamaPaths As New List(Of String)(searchPaths)
+                    ollamaPaths.Add(Path.Combine(localAppData, "Programs", "Ollama"))
+                    ollamaPaths.Add(Path.Combine(programFiles, "Ollama"))
+
+                    For Each dir As String In ollamaPaths
+                        Dim candidate As String = Path.Combine(dir, "ollama.exe")
+                        If File.Exists(candidate) Then
+                            cfg.OllamaExePath = candidate
+                            LogManager.AddSuccess($"ollama.exe trovato: {candidate}", "AppSettings")
+                            Exit For
+                        End If
+                    Next
+                End If
+
+                ' --- Fallback dinamico tramite PATH di sistema / WinGet / Chocolatey / Scoop ---
+                If String.IsNullOrWhiteSpace(cfg.NodeExePath) OrElse Not File.Exists(cfg.NodeExePath) Then
+                    Dim found = Modules.DependencyChecker.FindExecutable("node")
+                    If Not String.IsNullOrWhiteSpace(found) AndAlso File.Exists(found) Then
+                        cfg.NodeExePath = found
+                        LogManager.AddSuccess($"Node.js trovato tramite PATH/WinGet: {found}", "AppSettings")
+                    End If
+                End If
+
+                If String.IsNullOrWhiteSpace(cfg.NpmExePath) OrElse Not File.Exists(cfg.NpmExePath) Then
+                    Dim found = Modules.DependencyChecker.FindExecutable("npm")
+                    If Not String.IsNullOrWhiteSpace(found) AndAlso File.Exists(found) Then
+                        cfg.NpmExePath = found
+                        LogManager.AddSuccess($"npm trovato tramite PATH/WinGet: {found}", "AppSettings")
+                    End If
+                End If
+
+                If String.IsNullOrWhiteSpace(cfg.NodeRedCmdPath) OrElse Not File.Exists(cfg.NodeRedCmdPath) Then
+                    Dim found = Modules.DependencyChecker.FindExecutable("node-red")
+                    If Not String.IsNullOrWhiteSpace(found) AndAlso File.Exists(found) Then
+                        cfg.NodeRedCmdPath = found
+                        LogManager.AddSuccess($"node-red trovato tramite PATH/WinGet: {found}", "AppSettings")
+                    End If
+                End If
+
+                If String.IsNullOrWhiteSpace(cfg.OllamaExePath) OrElse Not File.Exists(cfg.OllamaExePath) Then
+                    Dim found = Modules.DependencyChecker.FindExecutable("ollama")
+                    If Not String.IsNullOrWhiteSpace(found) AndAlso File.Exists(found) Then
+                        cfg.OllamaExePath = found
+                        LogManager.AddSuccess($"ollama trovato tramite PATH/WinGet: {found}", "AppSettings")
+                    End If
+                End If
+
                 ' --- Riepilogo ---
                 If String.IsNullOrEmpty(cfg.NodeExePath) Then
                     LogManager.AddWarn("Node.js non trovato automaticamente. Configurare manualmente.", "AppSettings")
                 End If
                 If String.IsNullOrEmpty(cfg.NodeRedCmdPath) Then
                     LogManager.AddWarn("node-red.cmd non trovato automaticamente. Assicurarsi che Node-RED sia installato globalmente (npm install -g node-red).", "AppSettings")
+                End If
+                If String.IsNullOrEmpty(cfg.OllamaExePath) Then
+                    LogManager.AddWarn("ollama.exe non trovato automaticamente. Configurare manualmente o installare Ollama.", "AppSettings")
                 End If
 
                 ' Salva i percorsi trovati

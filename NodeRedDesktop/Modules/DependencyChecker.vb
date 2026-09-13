@@ -143,6 +143,28 @@ Namespace Modules
             End Try
             results("nodered") = nrStatus
 
+            ' ── Ollama ───────────────────────────────────────────────────────────
+            Dim olStatus As New DependencyStatus With {.Name = "ollama"}
+            Try
+                Dim olPath = OllamaManager.Instance.FindOllamaExe()
+                If String.IsNullOrWhiteSpace(olPath) Then olPath = "ollama"
+
+                Dim result = RunCommand(olPath, "--version")
+                If result.ExitCode = 0 AndAlso Not String.IsNullOrWhiteSpace(result.Output) Then
+                    olStatus.IsInstalled = True
+                    olStatus.Path = olPath
+                    Dim m = System.Text.RegularExpressions.Regex.Match(result.Output, "(\d+\.\d+\.\d+)")
+                    olStatus.Version = If(m.Success, m.Groups(1).Value, result.Output.Trim())
+                Else
+                    olStatus.IsInstalled = False
+                    olStatus.ErrorMessage = If(Not String.IsNullOrWhiteSpace(result.Error), result.Error.Trim(), "ollama non trovato o non installato.")
+                End If
+            Catch ex As Exception
+                olStatus.IsInstalled = False
+                olStatus.ErrorMessage = ex.Message
+            End Try
+            results("ollama") = olStatus
+
             ' Log riepilogativo
             For Each kv In results
                 If kv.Value.IsInstalled Then
@@ -242,6 +264,11 @@ Namespace Modules
                     If Not String.IsNullOrWhiteSpace(cfg.NodeRedCmdPath) Then
                         candidates.Add(cfg.NodeRedCmdPath)
                     End If
+                Case "ollama"
+                    If Not String.IsNullOrWhiteSpace(cfg.OllamaExePath) Then
+                        candidates.Add(cfg.OllamaExePath)
+                    End If
+                    candidates.Add(OllamaManager.Instance.FindOllamaExe())
             End Select
 
             ' ── 2. PATH di sistema tramite WHERE ─────────────────────────────
@@ -328,33 +355,293 @@ Namespace Modules
 #Region "Installazione / Aggiornamento"
 
         ''' <summary>
-        ''' Installa node-red globalmente tramite npm in modo asincrono.
-        ''' Richiama progressCallback per ogni riga di output npm.
+        ''' Esegue un processo generico con streaming riga per riga di stdout e stderr su progressCallback.
         ''' </summary>
-        ''' <param name="progressCallback">Callback invocata per ogni riga di output.</param>
-        ''' <returns>True se l installazione e riuscita (ExitCode = 0).</returns>
-        Public Async Function InstallNodeRedAsync(progressCallback As Action(Of String)) As Task(Of Boolean)
-            Return Await RunNpmGlobalCommandAsync("install", "node-red", "--unsafe-perm", progressCallback)
+        Public Async Function RunProcessStreamingAsync(exe As String, arguments As String, progressCallback As Action(Of String)) As Task(Of Boolean)
+            Return Await Task.Run(
+                Async Function() As Task(Of Boolean)
+                    Try
+                        Dim psi As New ProcessStartInfo()
+                        psi.FileName = exe
+                        psi.Arguments = arguments
+                        psi.UseShellExecute = False
+                        psi.CreateNoWindow = True
+                        psi.RedirectStandardOutput = True
+                        psi.RedirectStandardError = True
+
+                        Using proc = Process.Start(psi)
+                            If proc Is Nothing Then Return False
+
+                            Dim outTask = Task.Run(
+                                Async Function()
+                                    Dim line As String
+                                    Do
+                                        line = Await proc.StandardOutput.ReadLineAsync()
+                                        If line Is Nothing Then Exit Do
+                                        progressCallback?.Invoke(line)
+                                    Loop
+                                End Function)
+
+                            Dim errTask = Task.Run(
+                                Async Function()
+                                    Dim line As String
+                                    Do
+                                        line = Await proc.StandardError.ReadLineAsync()
+                                        If line Is Nothing Then Exit Do
+                                        progressCallback?.Invoke(line)
+                                    Loop
+                                End Function)
+
+                            Await Task.WhenAll(outTask, errTask)
+                            proc.WaitForExit()
+                            Return (proc.ExitCode = 0)
+                        End Using
+                    Catch ex As Exception
+                        progressCallback?.Invoke("[Process] Eccezione: " & ex.Message)
+                        Return False
+                    End Try
+                End Function)
         End Function
 
         ''' <summary>
-        ''' Aggiorna node-red globalmente tramite npm in modo asincrono.
-        ''' Richiama progressCallback per ogni riga di output npm.
+        ''' Installa Node.js LTS tramite WinGet o download diretto MSI in modo asincrono.
         ''' </summary>
-        ''' <param name="progressCallback">Callback invocata per ogni riga di output.</param>
-        ''' <returns>True se l aggiornamento e riuscito (ExitCode = 0).</returns>
+        Public Async Function InstallNodeJsAsync(progressCallback As Action(Of String)) As Task(Of Boolean)
+            progressCallback?.Invoke("[Node.js] Avvio installazione Node.js LTS...")
+            LogManager.AddInfo("[DependencyChecker] Avvio installazione Node.js LTS...", "DependencyChecker")
+
+            ' Prova 1: WinGet
+            Dim wingetPath = FindExecutable("winget")
+            If Not String.IsNullOrEmpty(wingetPath) Then
+                progressCallback?.Invoke("[Node.js] Installazione tramite WinGet (OpenJS.NodeJS.LTS)...")
+                Dim okWinget = Await RunProcessStreamingAsync("winget", "install -e --id OpenJS.NodeJS.LTS --accept-source-agreements --accept-package-agreements --silent", progressCallback)
+                If okWinget Then
+                    progressCallback?.Invoke("[Node.js] Installazione WinGet completata con successo!")
+                    AppSettings.AutoDetectPaths()
+                    Return True
+                End If
+                progressCallback?.Invoke("[Node.js] WinGet non riuscito, provo con download diretto...")
+            End If
+
+            ' Prova 2: Download MSI ufficiale
+            Try
+                Dim tempMsi = Path.Combine(Path.GetTempPath(), "node-v20-x64.msi")
+                progressCallback?.Invoke("[Node.js] Download installer MSI ufficiale in corso...")
+                Using client As New System.Net.WebClient()
+                    Await client.DownloadFileTaskAsync(New Uri("https://nodejs.org/dist/v20.18.0/node-v20.18.0-x64.msi"), tempMsi)
+                End Using
+
+                progressCallback?.Invoke("[Node.js] Esecuzione installer MSI silenzioso...")
+                Dim okMsi = Await RunProcessStreamingAsync("msiexec.exe", "/i """ & tempMsi & """ /quiet /qn /norestart", progressCallback)
+                AppSettings.AutoDetectPaths()
+                Return okMsi
+            Catch ex As Exception
+                progressCallback?.Invoke("[Node.js] Errore installazione: " & ex.Message)
+                Return False
+            End Try
+        End Function
+
+        ''' <summary>
+        ''' Installa Ollama tramite WinGet o download installer ufficiale OllamaSetup.exe.
+        ''' </summary>
+        Public Async Function InstallOllamaAsync(progressCallback As Action(Of String)) As Task(Of Boolean)
+            progressCallback?.Invoke("[Ollama] Avvio installazione server Ollama...")
+            LogManager.AddInfo("[DependencyChecker] Avvio installazione Ollama...", "DependencyChecker")
+
+            ' Prova 1: WinGet
+            Dim wingetPath = FindExecutable("winget")
+            If Not String.IsNullOrEmpty(wingetPath) Then
+                progressCallback?.Invoke("[Ollama] Installazione tramite WinGet (Ollama.Ollama)...")
+                Dim okWinget = Await RunProcessStreamingAsync("winget", "install -e --id Ollama.Ollama --accept-source-agreements --accept-package-agreements --silent", progressCallback)
+                If okWinget Then
+                    progressCallback?.Invoke("[Ollama] Installazione WinGet completata!")
+                    AppSettings.AutoDetectPaths()
+                    Return True
+                End If
+                progressCallback?.Invoke("[Ollama] WinGet non riuscito, avvio download OllamaSetup.exe...")
+            End If
+
+            ' Prova 2: Download ufficiale OllamaSetup.exe
+            Try
+                Dim tempExe = Path.Combine(Path.GetTempPath(), "OllamaSetup.exe")
+                progressCallback?.Invoke("[Ollama] Download OllamaSetup.exe da https://ollama.com/download/OllamaSetup.exe ...")
+                Using client As New System.Net.WebClient()
+                    Await client.DownloadFileTaskAsync(New Uri("https://ollama.com/download/OllamaSetup.exe"), tempExe)
+                End Using
+
+                progressCallback?.Invoke("[Ollama] Esecuzione installer Ollama...")
+                Dim okExe = Await RunProcessStreamingAsync(tempExe, "/silent", progressCallback)
+                AppSettings.AutoDetectPaths()
+                Return okExe
+            Catch ex As Exception
+                progressCallback?.Invoke("[Ollama] Errore installazione Ollama: " & ex.Message)
+                Return False
+            End Try
+        End Function
+
+        ''' <summary>
+        ''' Installa node-red globalmente tramite npm in modo asincrono (node-red@latest).
+        ''' </summary>
+        Public Async Function InstallNodeRedAsync(progressCallback As Action(Of String)) As Task(Of Boolean)
+            progressCallback?.Invoke("[Node-RED] Installazione release più recente (node-red@latest)...")
+            Dim ok = Await RunNpmGlobalCommandAsync("install", "node-red@latest", "--unsafe-perm", progressCallback)
+            If ok Then
+                AppSettings.AutoDetectPaths()
+                Dim ver = GetNodeRedVersion()
+                AppSettings.Current.LastKnownNodeRedVersion = ver
+                AppSettings.Save()
+            End If
+            Return ok
+        End Function
+
+        ''' <summary>
+        ''' Aggiorna node-red globalmente all'ultima versione stabile, arrestando prima Node-RED
+        ''' per liberare i lock sui file nativi (evitando l'errore EPERM) e riavviandolo al termine.
+        ''' </summary>
         Public Async Function UpdateNodeRedAsync(progressCallback As Action(Of String)) As Task(Of Boolean)
-            Return Await RunNpmGlobalCommandAsync("update", "node-red", Nothing, progressCallback)
+            Dim wasRunning As Boolean = False
+            Try
+                ' 1. Verifica se Node-RED è in esecuzione e fermalo
+                If NodeManager.Instance.IsRunning Then
+                    wasRunning = True
+                    progressCallback?.Invoke("[Aggiornamento] Rilevato Node-RED in esecuzione. Arresto temporaneo per sbloccare i file di sistema...")
+                    LogManager.AddInfo("[Update] Arresto Node-RED prima dell'aggiornamento...", "DependencyChecker")
+                    NodeManager.Instance.StopProcessInternal()
+                    Await Task.Delay(2000)
+                End If
+
+                ' 2. Esegui npm install -g --unsafe-perm node-red@latest
+                progressCallback?.Invoke("[Aggiornamento] Download e installazione dell'ultima versione di Node-RED...")
+                Dim ok = Await RunNpmGlobalCommandAsync("install", "node-red@latest", "--unsafe-perm", progressCallback)
+
+                If ok Then
+                    AppSettings.AutoDetectPaths()
+                    Dim newVer = GetNodeRedVersion()
+                    AppSettings.Current.LastKnownNodeRedVersion = newVer
+                    AppSettings.Save()
+                    progressCallback?.Invoke("[Aggiornamento] Node-RED aggiornato con successo alla versione: v" & newVer)
+                    LogManager.AddSuccess("[Update] Node-RED aggiornato con successo a v" & newVer, "DependencyChecker")
+
+                    ' 3. Se era attivo, riavvialo
+                    If wasRunning Then
+                        progressCallback?.Invoke("[Aggiornamento] Riavvio automatico di Node-RED in corso...")
+                        Await NodeManager.Instance.StartAsync()
+                    End If
+                    Return True
+                Else
+                    progressCallback?.Invoke("[Aggiornamento] ERRORE durante l'aggiornamento.")
+                    If wasRunning Then
+                        progressCallback?.Invoke("[Aggiornamento] Riavvio del processo precedente...")
+                        Await NodeManager.Instance.StartAsync()
+                    End If
+                    Return False
+                End If
+
+            Catch ex As Exception
+                progressCallback?.Invoke("[Aggiornamento] Eccezione: " & ex.Message)
+                LogManager.AddError("[Update] UpdateNodeRedAsync: " & ex.Message, "DependencyChecker")
+                Return False
+            End Try
+        End Function
+
+        ''' <summary>
+        ''' Procedura guidata automatica per configurare da zero un NUOVO PC:
+        ''' 1) Node.js e npm -> 2) Node-RED -> 3) Ollama -> 4) Ottimizzazioni Windows -> 5) Modello chat-light.
+        ''' </summary>
+        Public Async Function SetupCompleteSuiteAsync(progressCallback As Action(Of String)) As Task(Of Boolean)
+            Try
+                progressCallback?.Invoke("=================================================================")
+                progressCallback?.Invoke("   SETUP GUIDATO COMPLETO SUITE (NODE-RED + OLLAMA LOCAL AI)    ")
+                progressCallback?.Invoke("=================================================================")
+                Await Task.Delay(500)
+
+                Dim deps = CheckAll()
+
+                ' PASSO 1: Node.js & npm
+                progressCallback?.Invoke(vbCrLf & ">> PASSO 1/5: Verifica Node.js & npm...")
+                If Not deps("nodejs").IsInstalled OrElse Not deps("npm").IsInstalled Then
+                    progressCallback?.Invoke(">> Node.js mancante. Avvio installazione automatica...")
+                    Dim okNode = Await InstallNodeJsAsync(progressCallback)
+                    If Not okNode Then
+                        progressCallback?.Invoke(">> ERRORE: Impossibile installare Node.js automaticamente.")
+                        Return False
+                    End If
+                Else
+                    progressCallback?.Invoke(">> Node.js v" & deps("nodejs").Version & " e npm v" & deps("npm").Version & " già presenti!")
+                End If
+
+                ' PASSO 2: Node-RED
+                progressCallback?.Invoke(vbCrLf & ">> PASSO 2/5: Verifica / Installazione Node-RED...")
+                deps = CheckAll()
+                If Not deps("nodered").IsInstalled Then
+                    progressCallback?.Invoke(">> Node-RED mancante. Installazione globale via npm...")
+                    Dim okNr = Await InstallNodeRedAsync(progressCallback)
+                    If Not okNr Then
+                        progressCallback?.Invoke(">> ERRORE: Installazione Node-RED non riuscita.")
+                        Return False
+                    End If
+                Else
+                    progressCallback?.Invoke(">> Node-RED v" & deps("nodered").Version & " già installato!")
+                End If
+
+                ' PASSO 3: Ollama
+                progressCallback?.Invoke(vbCrLf & ">> PASSO 3/5: Verifica / Installazione Server Ollama...")
+                deps = CheckAll()
+                If Not deps("ollama").IsInstalled Then
+                    progressCallback?.Invoke(">> Ollama mancante. Avvio installazione...")
+                    Dim okOl = Await InstallOllamaAsync(progressCallback)
+                    If Not okOl Then
+                        progressCallback?.Invoke(">> ERRORE: Installazione Ollama non riuscita.")
+                        Return False
+                    End If
+                Else
+                    progressCallback?.Invoke(">> Ollama v" & deps("ollama").Version & " già installato!")
+                End If
+
+                ' PASSO 4: Ottimizzazioni Windows permanenti
+                progressCallback?.Invoke(vbCrLf & ">> PASSO 4/5: Applicazione Ottimizzazioni Windows Hardware (AVX2 CPU)...")
+                Dim okOpt = OllamaManager.Instance.ApplyOptimizations()
+                If okOpt Then
+                    progressCallback?.Invoke(">> Variabili d'ambiente Windows (OLLAMA_NUM_PARALLEL, KEEP_ALIVE, FLASH_ATTENTION) impostate!")
+                End If
+
+                ' PASSO 5: Avvio Ollama e Download modello consigliato
+                progressCallback?.Invoke(vbCrLf & ">> PASSO 5/5: Avvio Ollama & Preparazione Modello Veloce 'chat-light'...")
+                Dim okStart = Await OllamaManager.Instance.StartAsync()
+                If okStart Then
+                    Dim installed = Await OllamaManager.Instance.GetInstalledModelsAsync()
+                    Dim hasLight = False
+                    For Each m In installed
+                        If m.ToLower().Contains("chat-light") OrElse m.ToLower().Contains("qwen2.5:1.5b") Then
+                            hasLight = True
+                            Exit For
+                        End If
+                    Next
+
+                    If Not hasLight Then
+                        progressCallback?.Invoke(">> Download del modello leggero e veloce 'qwen2.5:1.5b' (consigliato)...")
+                        Await OllamaManager.Instance.PullModelAsync("qwen2.5:1.5b", progressCallback)
+                    Else
+                        progressCallback?.Invoke(">> Modello conversazionale 'chat-light' già pronto!")
+                    End If
+                End If
+
+                progressCallback?.Invoke(vbCrLf & "=================================================================")
+                progressCallback?.Invoke("   COMPLETATO: LA SUITE E PRONTA ALL'USO AL 100%!               ")
+                progressCallback?.Invoke("=================================================================")
+                LogManager.AddSuccess("[Setup] Installazione completa suite completata con successo!", "Setup")
+                Return True
+
+            Catch ex As Exception
+                progressCallback?.Invoke(">> Eccezione durante il setup: " & ex.Message)
+                LogManager.AddError("[Setup] Errore: " & ex.Message, "Setup")
+                Return False
+            End Try
         End Function
 
         ''' <summary>
         ''' Esegue un comando npm globale (-g) in modo asincrono con lettura riga-per-riga dell output.
         ''' </summary>
-        ''' <param name="npmVerb">Verbo npm: "install" o "update".</param>
-        ''' <param name="packageName">Nome del pacchetto npm.</param>
-        ''' <param name="extraArgs">Argomenti aggiuntivi (es. "--unsafe-perm") o Nothing.</param>
-        ''' <param name="progressCallback">Callback per ogni riga di output.</param>
-        ''' <returns>True se ExitCode = 0.</returns>
         Private Async Function RunNpmGlobalCommandAsync(npmVerb As String,
                                                         packageName As String,
                                                         extraArgs As String,
@@ -367,9 +654,9 @@ Namespace Modules
 
                         ' Costruzione argomenti
                         Dim args As New StringBuilder()
-                        args.Append($"{npmVerb} -g {packageName}")
+                        args.Append(npmVerb & " -g " & packageName)
                         If Not String.IsNullOrWhiteSpace(extraArgs) Then
-                            args.Append($" {extraArgs}")
+                            args.Append(" " & extraArgs)
                         End If
 
                         Dim psi As New ProcessStartInfo()
@@ -377,7 +664,7 @@ Namespace Modules
                         If npmPath.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase) OrElse
                            npmPath.EndsWith(".bat", StringComparison.OrdinalIgnoreCase) Then
                             psi.FileName = "cmd.exe"
-                            psi.Arguments = $"/c ""{npmPath}"" {args}"
+                            psi.Arguments = "/c """ & npmPath & """ " & args.ToString()
                         Else
                             psi.FileName = npmPath
                             psi.Arguments = args.ToString()
@@ -389,8 +676,8 @@ Namespace Modules
                         psi.RedirectStandardError = True
 
                         Dim logPrefix = If(npmVerb = "install", "Installazione", "Aggiornamento")
-                        progressCallback?.Invoke($"[npm] {logPrefix} {packageName} in corso...")
-                        LogManager.AddInfo($"[DependencyChecker] npm {args}", "DependencyChecker")
+                        progressCallback?.Invoke("[npm] " & logPrefix & " " & packageName & " in corso...")
+                        LogManager.AddInfo("[DependencyChecker] npm " & args.ToString(), "DependencyChecker")
 
                         Using proc = Process.Start(psi)
                             If proc Is Nothing Then
@@ -419,7 +706,7 @@ Namespace Modules
                                         line = Await proc.StandardError.ReadLineAsync()
                                         If line Is Nothing Then Exit Do
                                         Dim captured = line
-                                        progressCallback?.Invoke($"[stderr] {captured}")
+                                        progressCallback?.Invoke("[stderr] " & captured)
                                         LogManager.Add(captured, LogLevel.WARN, "npm")
                                     Loop
                                 End Function)
@@ -427,21 +714,21 @@ Namespace Modules
                             Await Task.WhenAll(readOutTask, readErrTask)
                             proc.WaitForExit()
 
-                            Dim ok = proc.ExitCode = 0
+                            Dim ok = (proc.ExitCode = 0)
                             If ok Then
-                                progressCallback?.Invoke($"[npm] {logPrefix} completata con successo.")
-                                LogManager.AddSuccess($"npm {npmVerb} {packageName} completato.", "DependencyChecker")
+                                progressCallback?.Invoke("[npm] " & logPrefix & " completata con successo.")
+                                LogManager.AddSuccess("npm " & npmVerb & " " & packageName & " completato.", "DependencyChecker")
                             Else
-                                progressCallback?.Invoke($"[npm] {logPrefix} fallita (ExitCode={proc.ExitCode}).")
-                                LogManager.AddError($"npm {npmVerb} {packageName} fallito (ExitCode={proc.ExitCode}).", "DependencyChecker")
+                                progressCallback?.Invoke("[npm] " & logPrefix & " fallita (ExitCode=" & proc.ExitCode.ToString() & ").")
+                                LogManager.AddError("npm " & npmVerb & " " & packageName & " fallito (ExitCode=" & proc.ExitCode.ToString() & ").", "DependencyChecker")
                             End If
 
                             Return ok
                         End Using
 
                     Catch ex As Exception
-                        progressCallback?.Invoke($"[npm] Eccezione: {ex.Message}")
-                        LogManager.AddError($"[DependencyChecker] RunNpmGlobalCommandAsync: {ex.Message}", "DependencyChecker")
+                        progressCallback?.Invoke("[npm] Eccezione: " & ex.Message)
+                        LogManager.AddError("[DependencyChecker] RunNpmGlobalCommandAsync: " & ex.Message, "DependencyChecker")
                         Return False
                     End Try
                 End Function)
@@ -449,7 +736,6 @@ Namespace Modules
 
 #End Region
 
-    
         ''' <summary>Restituisce la versione di Node-RED installata o stringa vuota.</summary>
         Public Function GetNodeRedVersion() As String
             Dim all = CheckAll()
@@ -464,6 +750,15 @@ Namespace Modules
             Dim all = CheckAll()
             If all.ContainsKey("nodejs") AndAlso all("nodejs").IsInstalled Then
                 Return all("nodejs").Version
+            End If
+            Return String.Empty
+        End Function
+
+        ''' <summary>Restituisce la versione di Ollama installata o stringa vuota.</summary>
+        Public Function GetOllamaVersion() As String
+            Dim all = CheckAll()
+            If all.ContainsKey("ollama") AndAlso all("ollama").IsInstalled Then
+                Return all("ollama").Version
             End If
             Return String.Empty
         End Function

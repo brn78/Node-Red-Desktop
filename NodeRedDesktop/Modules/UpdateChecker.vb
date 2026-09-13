@@ -1,4 +1,4 @@
-﻿Imports System
+Imports System
 Imports System.Net
 Imports System.Threading.Tasks
 Imports System.Text.RegularExpressions
@@ -134,6 +134,36 @@ Public Module UpdateChecker
             Dim errMsg As String = String.Format("Errore: {0}", ex.Message)
             LogManager.AddError(String.Format("CheckNodeJsUpdate - {0}", errMsg), "UpdateChecker")
             info.CurrentVersion = errMsg
+            info.IsUpdateAvailable = False
+        End Try
+
+        Return info
+    End Function
+
+    ''' <summary>
+    ''' Verifica in modo asincrono se è disponibile un aggiornamento per Ollama.
+    ''' Interroga le release GitHub ufficiali (api.github.com/repos/ollama/ollama/releases/latest).
+    ''' </summary>
+    Public Async Function CheckOllamaUpdateAsync() As Task(Of UpdateInfo)
+        Dim info As New UpdateInfo()
+        info.ComponentName = "Ollama"
+        info.IsUpdateAvailable = False
+        info.ReleaseUrl = "https://github.com/ollama/ollama/releases"
+        info.ChangelogUrl = "https://github.com/ollama/ollama/releases"
+
+        Try
+            info.CurrentVersion = Await Task.Run(Function() DependencyChecker.GetOllamaVersion())
+
+            Dim jsonResponse As String = Await FetchWithTimeoutAsync("https://api.github.com/repos/ollama/ollama/releases/latest", 10000)
+            Dim tagMatch As Match = Regex.Match(jsonResponse, """tag_name""\s*:\s*""([^""]+)""")
+            If tagMatch.Success Then
+                info.LatestVersion = tagMatch.Groups(1).Value.TrimStart("v"c)
+                Dim currentClean = info.CurrentVersion.TrimStart("v"c)
+                If Not String.IsNullOrWhiteSpace(currentClean) AndAlso Not currentClean.StartsWith("Errore") Then
+                    info.IsUpdateAvailable = (CompareVersions(info.LatestVersion, currentClean) > 0)
+                End If
+            End If
+        Catch ex As Exception
             info.IsUpdateAvailable = False
         End Try
 

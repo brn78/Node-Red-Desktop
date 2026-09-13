@@ -83,6 +83,9 @@
       <DependentUpon>MainForm.vb</DependentUpon>
       <SubType>Form</SubType>
     </Compile>
+    <Compile Include="Forms\ExitDialog.vb">
+      <SubType>Form</SubType>
+    </Compile>
     <Compile Include="Forms\ToastForm.vb">
       <SubType>Form</SubType>
     </Compile>
@@ -95,6 +98,7 @@
     <Compile Include="Modules\DependencyChecker.vb" />
     <Compile Include="Modules\LogManager.vb" />
     <Compile Include="Modules\NodeManager.vb" />
+    <Compile Include="Modules\OllamaManager.vb" />
     <Compile Include="Modules\SecurityManager.vb" />
     <Compile Include="Modules\StartupManager.vb" />
     <Compile Include="Modules\UpdateChecker.vb" />

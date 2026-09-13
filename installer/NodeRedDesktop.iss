@@ -4,7 +4,7 @@
 #define MyAppName "Node-RED Desktop"
 #define MyAppVersion "1.0.0"
 #define MyAppPublisher "Bruno Leonardi"
-#define MyAppURL "https://github.com/brn78/NodeRedDesktop"
+#define MyAppURL "https://github.com/brn78/Node-Red-Desktop"
 #define MyAppExeName "Node-RED Desktop.exe"
 
 [Setup]

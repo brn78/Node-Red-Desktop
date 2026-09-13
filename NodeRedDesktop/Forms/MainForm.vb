@@ -709,7 +709,7 @@ Partial Public Class MainForm
     End Sub
 
     Private Sub lnkChangelogQuick_LinkClicked(sender As Object, e As LinkLabelLinkClickedEventArgs) Handles lnkChangelogQuick.LinkClicked
-        Dim url = "https://github.com/brn78/NodeRedDesktop/releases"
+        Dim url = "https://github.com/brn78/Node-Red-Desktop/releases"
         If _hasUpdate AndAlso Not String.IsNullOrEmpty(_latestUpdateInfo.ChangelogUrl) Then
             url = _latestUpdateInfo.ChangelogUrl
         End If

@@ -176,18 +176,18 @@ Public Module UpdateChecker
 
     ''' <summary>
     ''' Verifica in modo asincrono se è disponibile una nuova release di Node-RED Desktop su GitHub.
-    ''' Interroga api.github.com/repos/brn78/NodeRedDesktop/releases/latest
+    ''' Interroga api.github.com/repos/brn78/Node-Red-Desktop/releases/latest
     ''' </summary>
     Public Async Function CheckDesktopAppUpdateAsync() As Task(Of UpdateInfo)
         Dim info As New UpdateInfo()
         info.ComponentName = "Node-RED Desktop"
         info.IsUpdateAvailable = False
         info.CurrentVersion = "1.0.0"
-        info.ReleaseUrl = "https://github.com/brn78/NodeRedDesktop/releases"
-        info.ChangelogUrl = "https://github.com/brn78/NodeRedDesktop/releases"
+        info.ReleaseUrl = "https://github.com/brn78/Node-Red-Desktop/releases"
+        info.ChangelogUrl = "https://github.com/brn78/Node-Red-Desktop/releases"
 
         Try
-            Dim jsonResponse As String = Await FetchWithTimeoutAsync("https://api.github.com/repos/brn78/NodeRedDesktop/releases/latest", 10000)
+            Dim jsonResponse As String = Await FetchWithTimeoutAsync("https://api.github.com/repos/brn78/Node-Red-Desktop/releases/latest", 10000)
 
             Dim tagMatch As Match = Regex.Match(jsonResponse, """tag_name""\s*:\s*""([^""]+)""")
             If tagMatch.Success Then

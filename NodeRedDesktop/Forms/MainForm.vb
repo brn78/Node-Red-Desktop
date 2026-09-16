@@ -666,7 +666,7 @@ Partial Public Class MainForm
             btnUpdateNowQuick.Enabled = False
             lblUpdateBannerText.Text = "Avvio download aggiornamento..."
 
-            Dim ok = Await UpdateChecker.DownloadAndInstallAppUpdateAsync(_latestUpdateInfo.DownloadUrl,
+            Dim ok = Await UpdateChecker.DownloadAndInstallAppUpdateAsync(_latestUpdateInfo,
                 Sub(pct, text)
                     BeginInvoke(Sub()
                         lblUpdateBannerText.Text = text
@@ -679,7 +679,9 @@ Partial Public Class MainForm
                 Application.Exit()
             Else
                 btnUpdateNowQuick.Enabled = True
-                ToastForm.Show("Errore Download", "Impossibile scaricare l'aggiornamento automaticamente. Apertura pagina GitHub...", ToastType.Error)
+                Dim errDetail = If(String.IsNullOrEmpty(UpdateChecker.LastUpdateError), "Impossibile scaricare l'aggiornamento automaticamente.", UpdateChecker.LastUpdateError)
+                ToastForm.Show("Aggiornamento non installato", errDetail & " Apertura pagina GitHub...", ToastType.Error)
+                lblUpdateBannerText.Text = errDetail
                 If Not String.IsNullOrEmpty(_latestUpdateInfo.ReleaseUrl) Then
                     Process.Start(New ProcessStartInfo(_latestUpdateInfo.ReleaseUrl) With {.UseShellExecute = True})
                 End If

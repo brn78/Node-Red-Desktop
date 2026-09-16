@@ -190,7 +190,11 @@ Public Module SecurityManager
 
     ''' <summary>
     ''' Genera un hash bcrypt di una password tramite Node.js e bcryptjs.
-    ''' Esegue: node -e "const b=require('bcryptjs');b.hash('PASSWORD',8,function(_,h){console.log(h)})"
+    ''' La password NON viene mai inserita nella riga di comando (visibile in Task Manager,
+    ''' nei log di processo e soggetta al parsing degli argomenti di Windows): viene passata
+    ''' al processo figlio tramite la variabile d'ambiente NRD_PASSWORD e letta da process.env.
+    ''' Il modulo bcryptjs viene risolto tramite NODE_PATH dalle installazioni di Node-RED
+    ''' (globale npm e cartella utente), cosi' la generazione funziona da qualunque cwd.
     ''' </summary>
     ''' <param name="password">Password in chiaro da hashare.</param>
     ''' <param name="nodePath">Percorso opzionale all eseguibile node. Usa AppSettings se non specificato.</param>
@@ -198,19 +202,23 @@ Public Module SecurityManager
     Public Async Function HashPassword(password As String, Optional nodePath As String = "") As Task(Of String)
         Return Await Task.Run(Function()
             Try
+                If String.IsNullOrEmpty(password) Then
+                    LogManager.AddError("Impossibile generare l'hash: password vuota.", "SecurityManager")
+                    Return String.Empty
+                End If
+
                 Dim nodeExe As String = nodePath
                 If String.IsNullOrWhiteSpace(nodeExe) Then
                     nodeExe = AppSettings.Current.NodeExePath
                 End If
                 If String.IsNullOrWhiteSpace(nodeExe) Then nodeExe = "node"
 
-                ' Sanitizza la password per uso in argomento command-line
-                Dim safePassword As String = password.Replace("\", "\\").Replace("'", "\'").Replace("""", "\""")
-
-                ' Script Node.js per hash bcrypt con saltRounds=8
-                Dim script As String = String.Format(
-                    "const b=require('bcryptjs');b.hash('{0}',8,function(_,h){{console.log(h)}})",
-                    safePassword)
+                ' Script Node.js: legge la password dall'ambiente, saltRounds=10 (default usato da Node-RED)
+                Const script As String =
+                    "const p=process.env.NRD_PASSWORD;" &
+                    "if(!p){console.error('NRD_PASSWORD mancante');process.exit(2);}" &
+                    "const b=require('bcryptjs');" &
+                    "b.hash(p,10,function(e,h){if(e){console.error(e.message);process.exit(1);}console.log(h);});"
 
                 Dim psi As New ProcessStartInfo()
                 psi.FileName = nodeExe
@@ -219,26 +227,38 @@ Public Module SecurityManager
                 psi.RedirectStandardOutput = True
                 psi.RedirectStandardError = True
                 psi.CreateNoWindow = True
+                psi.WorkingDirectory = GetNodeRedWorkingDirectory()
+                psi.EnvironmentVariables("NRD_PASSWORD") = password
+                psi.EnvironmentVariables("NODE_PATH") = BuildNodePath(psi.EnvironmentVariables("NODE_PATH"))
 
                 Using proc As New Process()
                     proc.StartInfo = psi
                     proc.Start()
 
+                    ' Lettura asincrona di stderr per evitare deadlock quando entrambi i buffer si riempiono
+                    Dim errTask As Task(Of String) = proc.StandardError.ReadToEndAsync()
                     Dim output As String = proc.StandardOutput.ReadToEnd().Trim()
-                    Dim errOutput As String = proc.StandardError.ReadToEnd().Trim()
 
-                    proc.WaitForExit(15000)
+                    If Not proc.WaitForExit(15000) Then
+                        Try
+                            proc.Kill()
+                        Catch
+                        End Try
+                        LogManager.AddError("Timeout nella generazione dell'hash bcrypt (15s).", "SecurityManager")
+                        Return String.Empty
+                    End If
 
+                    Dim errOutput As String = errTask.Result.Trim()
                     If Not String.IsNullOrWhiteSpace(errOutput) Then
                         LogManager.AddWarn(String.Format("HashPassword stderr: {0}", errOutput), "SecurityManager")
                     End If
 
-                    If Not String.IsNullOrWhiteSpace(output) AndAlso output.StartsWith("$2") Then
+                    If proc.ExitCode = 0 AndAlso IsValidBcryptHash(output) Then
                         LogManager.AddInfo("Hash bcrypt generato con successo.", "SecurityManager")
                         Return output
                     End If
 
-                    LogManager.AddError(String.Format("Hash bcrypt non valido. Output: {0}", output), "SecurityManager")
+                    LogManager.AddError(String.Format("Hash bcrypt non valido (exit code {0}).", proc.ExitCode), "SecurityManager")
                     Return String.Empty
                 End Using
 
@@ -247,6 +267,85 @@ Public Module SecurityManager
                 Return String.Empty
             End Try
         End Function)
+    End Function
+
+    ''' <summary>
+    ''' Verifica che una stringa abbia il formato di un hash bcrypt ($2a$/$2b$/$2y$, 60 caratteri).
+    ''' </summary>
+    Public Function IsValidBcryptHash(hash As String) As Boolean
+        If String.IsNullOrWhiteSpace(hash) Then Return False
+        Return Regex.IsMatch(hash, "^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$")
+    End Function
+
+    ''' <summary>
+    ''' Cartella di lavoro per i processi node ausiliari: la userDir di Node-RED se esiste,
+    ''' altrimenti la cartella dell'applicazione.
+    ''' </summary>
+    Private Function GetNodeRedWorkingDirectory() As String
+        Try
+            Dim userDir As String = AppSettings.GetUserDir()
+            If Not String.IsNullOrWhiteSpace(userDir) AndAlso Directory.Exists(userDir) Then Return userDir
+        Catch
+        End Try
+        Return AppDomain.CurrentDomain.BaseDirectory
+    End Function
+
+    ''' <summary>
+    ''' Costruisce un NODE_PATH che permette a require('bcryptjs') di trovare il modulo
+    ''' incluso in Node-RED, indipendentemente dalla cartella corrente.
+    ''' Candidati: node_modules della userDir, node_modules globale di npm
+    ''' (dedotto da NodeRedCmdPath, da %APPDATA%\npm o dalla cartella di node.exe)
+    ''' e node_modules interno del pacchetto node-red.
+    ''' </summary>
+    Private Function BuildNodePath(existing As String) As String
+        Dim paths As New List(Of String)()
+
+        Try
+            Dim userDir As String = AppSettings.GetUserDir()
+            If Not String.IsNullOrWhiteSpace(userDir) Then
+                paths.Add(Path.Combine(userDir, "node_modules"))
+            End If
+        Catch
+        End Try
+
+        Dim globalRoots As New List(Of String)()
+        Try
+            Dim cmd As String = AppSettings.Current.NodeRedCmdPath
+            If Not String.IsNullOrWhiteSpace(cmd) AndAlso File.Exists(cmd) Then
+                globalRoots.Add(Path.Combine(Path.GetDirectoryName(cmd), "node_modules"))
+            End If
+        Catch
+        End Try
+        Try
+            Dim appData As String = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)
+            If Not String.IsNullOrWhiteSpace(appData) Then
+                globalRoots.Add(Path.Combine(appData, "npm", "node_modules"))
+            End If
+        Catch
+        End Try
+        Try
+            Dim nodeExe As String = AppSettings.Current.NodeExePath
+            If Not String.IsNullOrWhiteSpace(nodeExe) AndAlso File.Exists(nodeExe) Then
+                globalRoots.Add(Path.Combine(Path.GetDirectoryName(nodeExe), "node_modules"))
+            End If
+        Catch
+        End Try
+
+        For Each root As String In globalRoots
+            paths.Add(root)
+            paths.Add(Path.Combine(root, "node-red", "node_modules"))
+            paths.Add(Path.Combine(root, "@node-red", "runtime", "node_modules"))
+        Next
+
+        If Not String.IsNullOrWhiteSpace(existing) Then paths.Add(existing)
+
+        Dim result As New List(Of String)()
+        For Each p As String In paths
+            If Not String.IsNullOrWhiteSpace(p) AndAlso Not result.Contains(p, StringComparer.OrdinalIgnoreCase) Then
+                result.Add(p)
+            End If
+        Next
+        Return String.Join(";", result)
     End Function
 
 #End Region

@@ -2,7 +2,9 @@
 ; Versione 1.0.0
 
 #define MyAppName "Node-RED Desktop"
-#define MyAppVersion "1.0.0"
+#ifndef MyAppVersion
+  #define MyAppVersion "1.0.0"
+#endif
 #define MyAppPublisher "Bruno Leonardi"
 #define MyAppURL "https://github.com/brn78/Node-Red-Desktop"
 #define MyAppExeName "Node-RED Desktop.exe"

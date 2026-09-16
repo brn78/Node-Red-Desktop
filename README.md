@@ -37,6 +37,12 @@ Applicazione desktop nativa per Windows sviluppata in **VB.NET (.NET Framework 4
   - Visualizzatore di log integrato con colorazione semantica per livello (INFO, AVVISI, ERRORI, DEBUG, OK).
   - Pausa, pulizia, filtro per severità e scorrimento automatico.
   - Esportazione istantanea dello storico su file `.txt` e `.csv`.
+- **🦙 Gestione Ollama Integrata**:
+  - Rilevamento, avvio automatico e arresto del server Ollama locale (porta 11434 configurabile).
+  - Elenco dei modelli installati, modello predefinito e stato delle ottimizzazioni dalla scheda dedicata.
+- **⬆️ Aggiornamenti Automatici**:
+  - Controllo all'avvio delle nuove versioni di Node-RED (registry npm), Node.js LTS, Ollama e dell'applicazione stessa (GitHub Releases).
+  - Download dell'installer con avanzamento e **verifica di integrità** prima dell'esecuzione: hash SHA-256 pubblicato con la release oppure, in sua assenza, firma Authenticode valida. Un installer che non supera la verifica viene eliminato e non eseguito.
 - **🛎️ Notifiche Toast & System Tray**:
   - Notifiche toast non modali con animazione di fade-in/fade-out ed auto-dismissal.
   - Icona nell'area di notifica (System Tray) con menu contestuale per avvio, stop, riavvio rapido e apertura browser.
@@ -49,8 +55,14 @@ Applicazione desktop nativa per Windows sviluppata in **VB.NET (.NET Framework 4
 ```text
 NodeRedDesktop/
 ├── NodeRedDesktop.sln                     # Soluzione Visual Studio
+├── .gitattributes                         # Normalizzazione fine riga (CRLF per i sorgenti .NET)
 ├── .gitignore                             # Regole di esclusione build e cache
 ├── README.md                              # Documentazione di progetto
+├── installer/
+│   ├── NodeRedDesktop.iss                 # Script Inno Setup dell'installer
+│   └── build-release.ps1                  # Build Release + installer + hash SHA-256 (+ firma opzionale)
+├── dist/
+│   └── Node-RED-Desktop-Setup.exe         # Installer generato
 └── NodeRedDesktop/
     ├── NodeRedDesktop.vbproj              # Progetto VB.NET WinForms
     ├── Program.vb                         # Entry point dell'applicazione (Sub Main)
@@ -58,17 +70,19 @@ NodeRedDesktop/
     │   ├── MainForm.vb                    # Logica applicativa principale
     │   ├── MainForm.Designer.vb           # Definizione controlli Visual Studio Designer
     │   ├── MainForm.resx                  # Risorse grafiche della form principale
+    │   ├── ExitDialog.vb                  # Finestra di conferma chiusura / riduzione a icona
     │   ├── ToastForm.vb                   # Notifiche toast animate
     │   └── ToastForm.Designer.vb          # Layout grafico del toast
     ├── Helpers/
     │   └── UIHelper.vb                    # Costanti tema Dark, palette colori e stili
     ├── Modules/
     │   ├── NodeManager.vb                 # Gestione processo Node-RED, watchdog e porte
+    │   ├── OllamaManager.vb               # Avvio/arresto server Ollama e lista modelli
     │   ├── DependencyChecker.vb           # Verifica e installazione Node.js / npm / Node-RED
     │   ├── StartupManager.vb              # Autoavvio Windows (Registry e Task Scheduler)
     │   ├── BackupManager.vb               # Schedulazione, creazione ZIP e ripristino
     │   ├── SecurityManager.vb             # Gestione settings.js, bcrypt e restrizioni IP
-    │   ├── UpdateChecker.vb               # Verifica aggiornamenti da registry npm
+    │   ├── UpdateChecker.vb               # Verifica aggiornamenti, download e validazione installer
     │   └── LogManager.vb                  # Coda log thread-safe ed esportazione
     ├── Services/
     │   └── AppSettings.vb                 # Configurazione XML serializzabile e auto-detect percorsi
@@ -100,6 +114,29 @@ msbuild NodeRedDesktop.sln /t:Rebuild /p:Configuration=Debug
 ```
 
 L'eseguibile generato sarà disponibile in `NodeRedDesktop\bin\Release\Node-RED Desktop.exe`.
+
+---
+
+## 📦 Creazione Installer e Pubblicazione Release
+
+Lo script `installer\build-release.ps1` compila in Release, genera l'installer con [Inno Setup 6](https://jrsoftware.org/isinfo.php) e calcola l'hash SHA-256:
+
+```powershell
+# Versione letta da AssemblyInfo.vb
+.\installer\build-release.ps1
+
+# Versione esplicita e firma Authenticode opzionale
+.\installer\build-release.ps1 -Version 1.1.0 -SignTool "C:\...\signtool.exe" -CertThumbprint <thumbprint>
+```
+
+In `dist\` vengono prodotti `Node-RED-Desktop-Setup.exe` e `Node-RED-Desktop-Setup.exe.sha256`.
+Per pubblicare una release su GitHub:
+
+1. Aggiornare `AssemblyVersion`/`AssemblyFileVersion` in `NodeRedDesktop\My Project\AssemblyInfo.vb` (l'applicazione ricava da lì la versione corrente per il confronto con l'ultima release).
+2. Creare un tag `vX.Y.Z` e la release corrispondente.
+3. Caricare come asset **entrambi** i file: l'installer e il file `.sha256`. Senza hash pubblicato l'auto-update accetta soltanto installer firmati digitalmente.
+
+> **Nota sicurezza (hash password)**: gli hash bcrypt per `adminAuth` vengono generati tramite Node.js e il modulo `bcryptjs` incluso in Node-RED. La password viene passata al processo figlio tramite variabile d'ambiente, mai sulla riga di comando.
 
 ---
 

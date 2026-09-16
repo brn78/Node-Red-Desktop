@@ -11,5 +11,5 @@ Imports System.Reflection
 <Assembly: AssemblyCopyright("Copyright (C) 2026")>
 <Assembly: AssemblyTrademark("")>
 <Assembly: AssemblyCulture("")>
-<Assembly: AssemblyVersion("1.0.0.0")>
-<Assembly: AssemblyFileVersion("1.0.0.0")>
+<Assembly: AssemblyVersion("1.1.0.0")>
+<Assembly: AssemblyFileVersion("1.1.0.0")>

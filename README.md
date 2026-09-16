@@ -56,13 +56,13 @@ Applicazione desktop nativa per Windows sviluppata in **VB.NET (.NET Framework 4
 NodeRedDesktop/
 ├── NodeRedDesktop.sln                     # Soluzione Visual Studio
 ├── .gitattributes                         # Normalizzazione fine riga (CRLF per i sorgenti .NET)
-├── .gitignore                             # Regole di esclusione build e cache
+├── .gitignore                             # Regole di esclusione build, cache e dist/
+├── .github/workflows/release.yml          # CI: build, installer Inno Setup 7 e GitHub Release
 ├── README.md                              # Documentazione di progetto
 ├── installer/
 │   ├── NodeRedDesktop.iss                 # Script Inno Setup dell'installer
 │   └── build-release.ps1                  # Build Release + installer + hash SHA-256 (+ firma opzionale)
-├── dist/
-│   └── Node-RED-Desktop-Setup.exe         # Installer generato
+├── dist/                                  # Installer generati localmente (non versionati)
 └── NodeRedDesktop/
     ├── NodeRedDesktop.vbproj              # Progetto VB.NET WinForms
     ├── Program.vb                         # Entry point dell'applicazione (Sub Main)
@@ -119,7 +119,20 @@ L'eseguibile generato sarà disponibile in `NodeRedDesktop\bin\Release\Node-RED 
 
 ## 📦 Creazione Installer e Pubblicazione Release
 
-Lo script `installer\build-release.ps1` compila in Release, genera l'installer con [Inno Setup 6](https://jrsoftware.org/isinfo.php) e calcola l'hash SHA-256:
+### Release automatica (GitHub Actions)
+
+Il workflow `.github/workflows/release.yml` si avvia al push di un tag `vX.Y.Z` (o manualmente da *Actions → Release → Run workflow*): su un runner Windows compila in Release con MSBuild, installa [Inno Setup 7](https://jrsoftware.org/isinfo.php), genera l'installer e il file `.sha256` e pubblica la GitHub Release con entrambi gli asset. È il canale di distribuzione ufficiale: l'auto-update dell'applicazione legge da lì.
+
+```powershell
+# 1. aggiornare AssemblyVersion/AssemblyFileVersion in AssemblyInfo.vb, commit
+# 2. tag e push
+git tag v1.1.0
+git push origin main --tags
+```
+
+### Build locale
+
+Lo script `installer\build-release.ps1` compila in Release, genera l'installer con Inno Setup (6 o 7) e calcola l'hash SHA-256:
 
 ```powershell
 # Versione letta da AssemblyInfo.vb
@@ -130,11 +143,7 @@ Lo script `installer\build-release.ps1` compila in Release, genera l'installer c
 ```
 
 In `dist\` vengono prodotti `Node-RED-Desktop-Setup.exe` e `Node-RED-Desktop-Setup.exe.sha256`.
-Per pubblicare una release su GitHub:
-
-1. Aggiornare `AssemblyVersion`/`AssemblyFileVersion` in `NodeRedDesktop\My Project\AssemblyInfo.vb` (l'applicazione ricava da lì la versione corrente per il confronto con l'ultima release).
-2. Creare un tag `vX.Y.Z` e la release corrispondente.
-3. Caricare come asset **entrambi** i file: l'installer e il file `.sha256`. Senza hash pubblicato l'auto-update accetta soltanto installer firmati digitalmente.
+Se si pubblica a mano, caricare come asset **entrambi** i file: senza hash pubblicato l'auto-update accetta soltanto installer firmati digitalmente. L'applicazione ricava la propria versione da `AssemblyInfo.vb`: tenerla allineata al tag.
 
 > **Nota sicurezza (hash password)**: gli hash bcrypt per `adminAuth` vengono generati tramite Node.js e il modulo `bcryptjs` incluso in Node-RED. La password viene passata al processo figlio tramite variabile d'ambiente, mai sulla riga di comando.
 

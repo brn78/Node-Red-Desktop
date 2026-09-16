@@ -50,8 +50,8 @@ $MsBuild = Find-Tool $MsBuild @(
     "${env:ProgramFiles(x86)}\Microsoft Visual Studio\*\*\MSBuild\Current\Bin\MSBuild.exe"
 ) 'MSBuild.exe'
 $Iscc = Find-Tool $Iscc @(
-    "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
-    "${env:ProgramFiles}\Inno Setup 6\ISCC.exe"
+    "${env:ProgramFiles(x86)}\Inno Setup*\ISCC.exe",
+    "${env:ProgramFiles}\Inno Setup*\ISCC.exe"
 ) 'ISCC.exe'
 
 # Versione: parametro oppure AssemblyVersion in AssemblyInfo.vb

@@ -1,5 +1,5 @@
-; Script Inno Setup per Node-RED Desktop
-; Versione 1.0.0
+; Script Inno Setup (6.x / 7.x) per Node-RED Desktop
+; La versione si passa da riga di comando: ISCC /DMyAppVersion=X.Y.Z NodeRedDesktop.iss
 
 #define MyAppName "Node-RED Desktop"
 #ifndef MyAppVersion
@@ -28,6 +28,9 @@ UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
+; Installer x86 (default): adatto all'applicazione AnyCPU su .NET Framework 4.8
+ArchitecturesAllowed=x86compatible
+TimeStampsInUTC=yes
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog

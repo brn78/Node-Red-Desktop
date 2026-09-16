@@ -30,3 +30,6 @@ packages/
 *~
 thumbs.db
 desktop.ini
+
+# Installer generati (pubblicati come GitHub Release, non versionati)
+dist/

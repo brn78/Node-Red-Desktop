@@ -1,0 +1,97 @@
+name: Release
+
+# Compila Node-RED Desktop, crea l'installer con Inno Setup 7 e pubblica una GitHub Release
+# con installer + hash SHA-256 (usati dall'auto-update integrato nell'applicazione).
+#
+# Si avvia automaticamente al push di un tag "vX.Y.Z", oppure manualmente da Actions
+# (workflow_dispatch) indicando la versione.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Versione da pubblicare (es. 1.1.0)'
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  INSTALLER_NAME: Node-RED-Desktop-Setup.exe
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Determina versione
+        id: ver
+        shell: pwsh
+        run: |
+          $v = if ('${{ github.event_name }}' -eq 'workflow_dispatch') { '${{ inputs.version }}' } else { '${{ github.ref_name }}'.TrimStart('v') }
+          if ($v -notmatch '^\d+\.\d+\.\d+$') { throw "Versione non valida: '$v' (atteso X.Y.Z)" }
+          $asm = Get-Content 'NodeRedDesktop/My Project/AssemblyInfo.vb' -Raw
+          if ($asm -match 'AssemblyVersion\("(\d+\.\d+\.\d+)') {
+            if ($Matches[1] -ne $v) { Write-Warning "AssemblyVersion ($($Matches[1])) diversa dal tag ($v): l'auto-update confronta la versione dell'assembly." }
+          }
+          "version=$v" >> $env:GITHUB_OUTPUT
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Compila Release
+        run: msbuild NodeRedDesktop.sln /nologo /v:m /t:Rebuild /p:Configuration=Release
+
+      - name: Installa Inno Setup 7
+        shell: pwsh
+        run: |
+          $url = 'https://jrsoftware.org/download.php/is.exe'
+          $exe = Join-Path $env:RUNNER_TEMP 'innosetup.exe'
+          Invoke-WebRequest -Uri $url -OutFile $exe -UserAgent 'Mozilla/5.0'
+          $p = Start-Process -FilePath $exe -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-','/ALLUSERS' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Installazione Inno Setup fallita (exit $($p.ExitCode))" }
+          $iscc = Get-ChildItem "${env:ProgramFiles(x86)}\Inno Setup*\ISCC.exe", "${env:ProgramFiles}\Inno Setup*\ISCC.exe" -ErrorAction SilentlyContinue |
+                  Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $iscc) { throw 'ISCC.exe non trovato dopo l''installazione' }
+          & $iscc.FullName /? 2>$null | Select-Object -First 1
+          "ISCC=$($iscc.FullName)" >> $env:GITHUB_ENV
+
+      - name: Crea installer
+        shell: pwsh
+        run: |
+          & $env:ISCC /Q "/DMyAppVersion=${{ steps.ver.outputs.version }}" installer\NodeRedDesktop.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC exit $LASTEXITCODE" }
+          $setup = "dist\$env:INSTALLER_NAME"
+          if (-not (Test-Path $setup)) { throw "Installer non trovato: $setup" }
+          $hash = (Get-FileHash -Algorithm SHA256 $setup).Hash.ToLowerInvariant()
+          [System.IO.File]::WriteAllText("$setup.sha256", "$hash *$env:INSTALLER_NAME`n", (New-Object System.Text.UTF8Encoding($false)))
+          "SHA256=$hash" >> $env:GITHUB_ENV
+          Write-Host "SHA-256: $hash"
+
+      - name: Carica artefatti
+        uses: actions/upload-artifact@v4
+        with:
+          name: Node-RED-Desktop-${{ steps.ver.outputs.version }}
+          path: |
+            dist/${{ env.INSTALLER_NAME }}
+            dist/${{ env.INSTALLER_NAME }}.sha256
+
+      - name: Pubblica release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.ver.outputs.version }}
+          name: Node-RED Desktop v${{ steps.ver.outputs.version }}
+          generate_release_notes: true
+          body: |
+            **Installer**: `${{ env.INSTALLER_NAME }}`
+            **SHA-256**: `${{ env.SHA256 }}`
+
+            Compilato da GitHub Actions con MSBuild (.NET Framework 4.8) e Inno Setup 7.
+            L'auto-update integrato verifica l'hash prima di eseguire l'installer.
+          files: |
+            dist/${{ env.INSTALLER_NAME }}
+            dist/${{ env.INSTALLER_NAME }}.sha256

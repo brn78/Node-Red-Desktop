@@ -20,6 +20,7 @@ permissions:
 
 env:
   INSTALLER_NAME: Node-RED-Desktop-Setup.exe
+  INNO_VERSION: 7.1.0
 
 jobs:
   build:
@@ -49,9 +50,12 @@ jobs:
       - name: Installa Inno Setup 7
         shell: pwsh
         run: |
-          $url = 'https://jrsoftware.org/download.php/is.exe'
+          # Release ufficiale su GitHub (download.php su jrsoftware.org restituisce una pagina HTML, non il file)
+          $ver = '${{ env.INNO_VERSION }}'
+          $url = "https://github.com/jrsoftware/issrc/releases/download/is-$($ver.Replace('.','_'))/innosetup-$ver-x64.exe"
           $exe = Join-Path $env:RUNNER_TEMP 'innosetup.exe'
-          Invoke-WebRequest -Uri $url -OutFile $exe -UserAgent 'Mozilla/5.0'
+          Invoke-WebRequest -Uri $url -OutFile $exe
+          if ((Get-Item $exe).Length -lt 1MB) { throw "Download Inno Setup non valido da $url" }
           $p = Start-Process -FilePath $exe -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-','/ALLUSERS' -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "Installazione Inno Setup fallita (exit $($p.ExitCode))" }
           $iscc = Get-ChildItem "${env:ProgramFiles(x86)}\Inno Setup*\ISCC.exe", "${env:ProgramFiles}\Inno Setup*\ISCC.exe" -ErrorAction SilentlyContinue |
